@@ -1,0 +1,102 @@
+---
+title: Unity 定制图集打包
+tags: Unity
+grammar_cjkRuby: true
+---
+
+
+```cs
+using System.IO;
+using UnityEditor;
+
+public class TextureAssetPostprocessor : AssetPostprocessor
+{
+    void OnPreprocessTexture()
+    {
+        if (!assetPath.StartsWith("Assets/UI"))
+            return;
+
+        var textureImporter = assetImporter as TextureImporter;
+
+        var atlasName = new DirectoryInfo(Path.GetDirectoryName(assetPath)).Name;
+        textureImporter.spritePackingTag = atlasName;
+        textureImporter.mipmapEnabled = false;
+    }
+}
+```
+***
+
+```cs
+using UnityEditor;
+using UnityEditor.Sprites;
+using UnityEngine;
+using System.Collections.Generic;
+
+public class CustomPackerPolicy : IPackerPolicy
+{
+    public int GetVersion()
+    {
+        return 1;
+    }
+
+    public void OnGroupAtlases(BuildTarget target, PackerJob job, int[] textureImporterInstanceIDs)
+    {
+        var assets = new HashSet<string>();//存储有被场景引用的资源
+        var scenes = AssetDatabase.FindAssets("t:SceneAsset");
+        for (var i = 0; i < scenes.Length; i++)
+        {
+            var guid = scenes[i];
+            var assetPath = AssetDatabase.GUIDToAssetPath(guid);
+
+            EditorUtility.DisplayProgressBar("AssetDatabase.GetDependencies", assetPath, 1.0f * i / scenes.Length);
+
+            var dependencies = AssetDatabase.GetDependencies(assetPath);
+            foreach (var dependency in dependencies)
+            {
+                if (!assets.Contains(dependency))
+                    assets.Add(dependency);
+            }
+        }
+
+        var groups = new Dictionary<string, List<Sprite>>();
+
+        for (var i = 0; i < textureImporterInstanceIDs.Length; i++)
+        {
+            var instanceID = textureImporterInstanceIDs[i];
+            var textureImporter = EditorUtility.InstanceIDToObject(instanceID) as TextureImporter;
+
+            EditorUtility.DisplayProgressBar("AssetDatabase.LoadAssetAtPath", textureImporter.assetPath, 1.0f * i / scenes.Length);
+
+            if (!assets.Contains(textureImporter.assetPath))
+                continue;
+
+            var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(textureImporter.assetPath);
+
+            if (!groups.ContainsKey(textureImporter.spritePackingTag))
+                groups.Add(textureImporter.spritePackingTag, new List<Sprite>());
+
+            groups[textureImporter.spritePackingTag].Add(sprite);
+        }
+
+        foreach (var group in groups)
+        {
+            EditorUtility.DisplayProgressBar("AddAtlas", group.Key, 0.5f);
+
+            job.AddAtlas(group.Key, new AtlasSettings()
+            {
+                format = TextureFormat.ETC2_RGBA8,
+                maxWidth = 4096,
+                maxHeight = 4096,
+                //enableRotation = true
+            });
+
+            foreach (var sprite in group.Value)
+            {
+                job.AssignToAtlas(group.Key, sprite, SpritePackingMode.Tight, SpritePackingRotation.None);
+            }
+        }
+
+        EditorUtility.ClearProgressBar();
+    }
+}
+```
